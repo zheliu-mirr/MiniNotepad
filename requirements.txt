@@ -1,0 +1,2 @@
+# chardet为可选依赖，不安装时使用内置轻量编码检测
+# pip install chardet
