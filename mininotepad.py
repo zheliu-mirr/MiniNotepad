@@ -128,11 +128,27 @@ class BatchProcessDialog(tk.Toplevel):
         self.op_var = tk.StringVar(value="add_prefix")
         ops = [("添加前缀", "add_prefix"), ("添加后缀", "add_suffix"),
                ("删除前缀", "remove_prefix"), ("删除后缀", "remove_suffix"),
-               ("替换文本", "replace")]
-        for i, (text, val) in enumerate(ops):
+               ("替换文本", "replace"),
+               ("---", None),
+               ("锚点前插入", "insert_before_anchor"),
+               ("锚点后插入", "insert_after_anchor"),
+               ("锚点前删除N字符", "delete_before_anchor"),
+               ("锚点后删除N字符", "delete_after_anchor")]
+        col = 0
+        row = 0
+        for text, val in ops:
+            if val is None:
+                # 分隔符行，跳到下一行
+                row += 1
+                col = 0
+                continue
             ttk.Radiobutton(frame_op, text=text, variable=self.op_var,
                             value=val, command=self._on_op_change).grid(
-                row=i // 3, column=i % 3, sticky=tk.W, padx=5, pady=2)
+                row=row, column=col, sticky=tk.W, padx=5, pady=2)
+            col += 1
+            if col >= 3:
+                col = 0
+                row += 1
 
         # 输入内容
         frame_input = ttk.LabelFrame(self, text="输入内容", padding=8)
@@ -146,6 +162,10 @@ class BatchProcessDialog(tk.Toplevel):
         ttk.Label(frame_input, text="替换为:").grid(row=1, column=0, sticky=tk.W)
         self.entry_replace = ttk.Entry(frame_input, width=40)
         self.entry_replace.grid(row=1, column=1, sticky=tk.EW, padx=5)
+
+        ttk.Label(frame_input, text="锚点文本:").grid(row=2, column=0, sticky=tk.W)
+        self.entry_anchor = ttk.Entry(frame_input, width=40)
+        self.entry_anchor.grid(row=2, column=1, sticky=tk.EW, padx=5)
 
         frame_input.columnconfigure(1, weight=1)
         self._on_op_change()
@@ -179,6 +199,16 @@ class BatchProcessDialog(tk.Toplevel):
             self.entry_replace.config(state=tk.NORMAL)
         else:
             self.entry_replace.config(state=tk.DISABLED)
+        # 锚点相关操作显示锚点输入框
+        if op in ("insert_before_anchor", "insert_after_anchor",
+                   "delete_before_anchor", "delete_after_anchor"):
+            self.entry_anchor.config(state=tk.NORMAL)
+            # 删除操作时，处理文本填数字（删除字符数）
+            if op in ("delete_before_anchor", "delete_after_anchor"):
+                self.entry_text.delete(0, tk.END)
+                self.entry_text.insert(0, "1")
+        else:
+            self.entry_anchor.config(state=tk.DISABLED)
 
     def _on_sel_change(self):
         if self.sel_var.get() == "custom":
@@ -212,8 +242,21 @@ class BatchProcessDialog(tk.Toplevel):
         op = self.op_var.get()
         text = self.entry_text.get()
         replace_text = self.entry_replace.get()
+        anchor = self.entry_anchor.get()
 
-        if op not in ("remove_prefix", "remove_suffix") and not text:
+        # 锚点操作必须填写锚点文本
+        if op in ("insert_before_anchor", "insert_after_anchor",
+                   "delete_before_anchor", "delete_after_anchor"):
+            if not anchor:
+                messagebox.showwarning("提示", "请输入锚点文本", parent=self)
+                return
+            if not text:
+                messagebox.showwarning("提示", "请输入处理内容", parent=self)
+                return
+
+        if op not in ("remove_prefix", "remove_suffix") and op not in (
+            "insert_before_anchor", "insert_after_anchor",
+            "delete_before_anchor", "delete_after_anchor") and not text:
             messagebox.showwarning("提示", "请输入处理文本", parent=self)
             return
 
@@ -250,6 +293,11 @@ class BatchProcessDialog(tk.Toplevel):
             target_lines = list(range(1, total_lines + 1))
 
         target_set = set(target_lines)
+        try:
+            delete_n = int(text) if text else 0
+        except ValueError:
+            delete_n = 0
+
         new_lines = []
         for i, line in enumerate(all_lines):
             line_num = i + 1
@@ -270,6 +318,34 @@ class BatchProcessDialog(tk.Toplevel):
                         new_lines.append(line)
                 elif op == "replace":
                     new_lines.append(line.replace(text, replace_text))
+                elif op == "insert_before_anchor":
+                    pos = line.find(anchor)
+                    if pos >= 0:
+                        new_lines.append(line[:pos] + text + line[pos:])
+                    else:
+                        new_lines.append(line)
+                elif op == "insert_after_anchor":
+                    pos = line.find(anchor)
+                    if pos >= 0:
+                        after_pos = pos + len(anchor)
+                        new_lines.append(line[:after_pos] + text + line[after_pos:])
+                    else:
+                        new_lines.append(line)
+                elif op == "delete_before_anchor":
+                    pos = line.find(anchor)
+                    if pos >= 0:
+                        del_start = max(0, pos - delete_n)
+                        new_lines.append(line[:del_start] + line[pos:])
+                    else:
+                        new_lines.append(line)
+                elif op == "delete_after_anchor":
+                    pos = line.find(anchor)
+                    if pos >= 0:
+                        after_pos = pos + len(anchor)
+                        del_end = min(len(line), after_pos + delete_n)
+                        new_lines.append(line[:after_pos] + line[del_end:])
+                    else:
+                        new_lines.append(line)
             else:
                 new_lines.append(line)
 
@@ -612,6 +688,11 @@ class MiniNotepad(tk.Tk):
         batch_menu.add_command(label="行尾添加文本...", command=lambda: self._quick_batch("add_suffix"))
         batch_menu.add_command(label="删除行首文本...", command=lambda: self._quick_batch("remove_prefix"))
         batch_menu.add_command(label="删除行尾文本...", command=lambda: self._quick_batch("remove_suffix"))
+        batch_menu.add_separator()
+        batch_menu.add_command(label="锚点前插入...", command=lambda: self._quick_batch("insert_before_anchor"))
+        batch_menu.add_command(label="锚点后插入...", command=lambda: self._quick_batch("insert_after_anchor"))
+        batch_menu.add_command(label="锚点前删除...", command=lambda: self._quick_batch("delete_before_anchor"))
+        batch_menu.add_command(label="锚点后删除...", command=lambda: self._quick_batch("delete_after_anchor"))
         batch_menu.add_separator()
         batch_menu.add_command(label="删除空行", command=self._remove_blank_lines)
         batch_menu.add_command(label="删除重复行", command=self._remove_duplicate_lines)
